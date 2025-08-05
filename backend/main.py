@@ -6,7 +6,10 @@ import requests
 from firebase_service import get_summary_cache, set_summary_cache
 from groq import Groq
 import os
+import logging
 
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class SummarizeRequest(BaseModel):
     paper_id: str
@@ -16,10 +19,11 @@ class SummarizeRequest(BaseModel):
     published: Union[str, int] = ""
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+if not GROQ_API_KEY:
+    logger.error("GROQ_API_KEY not set")
 ai_client = Groq(api_key=GROQ_API_KEY)
 
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=['*'],
@@ -28,26 +32,21 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-async def root():
-    return {"message": "Welcome to Frontier v0.2 API! Use /search-papers to find research or /summarize-paper for AI summaries."}
-
-
 @app.get("/search-papers")
-def search_papers(
+async def search_papers(
     query: str = Query(default='', description="Search query for research papers"),
     sort: str = Query(default='relevance', description="Sort order for results"),
     year_filter: str = Query(default='2020-2025', description="Year range filter for results")
 ):
+    logger.info(f"Received search request: query={query}, sort={sort}, year_filter={year_filter}")
     if not query.strip():
+        logger.warning("Empty query received")
         return {"results": []}
-
     try:
         years = year_filter.split('-')
         from_year = years[0]
         to_year = years[1] if len(years) > 1 else years[0]
         filters = f"from_publication_date:{from_year}-01-01,to_publication_date:{to_year}-12-31,type:article"
-
         response = requests.get(
             'https://api.openalex.org/works',
             params=[
@@ -57,23 +56,20 @@ def search_papers(
                 ('sort', 'relevance_score:desc'),
                 ('mailto', 'pranaunaras12@gmail.com')
             ],
-            headers={
-                "User-Agent": "FrontierApp/1.0 (pranaunaras12@gmail.com)"
-            }
+            headers={"User-Agent": "FrontierApp/1.0 (pranaunaras12@gmail.com)"}
         )
         response.raise_for_status()
         results = response.json()["results"]
-        # Filter for papers with an abstract
-        filtered = [
-            paper for paper in results
-            if paper.get("abstract_inverted_index") or paper.get("abstract")
-        ]
+        filtered = [paper for paper in results if paper.get("abstract_inverted_index") or paper.get("abstract")]
+        logger.info(f"Returning {len(filtered)} papers")
         return filtered
     except requests.RequestException as e:
+        logger.error(f"Search error: {str(e)}")
         return {"error": str(e)}
 
 @app.post("/summarize-paper")
-def summarize_paper(req: SummarizeRequest):
+async def summarize_paper(req: SummarizeRequest):
+    logger.info(f"Received summarize request: paper_id={req.paper_id}, title={req.title}, abstract_length={len(req.abstract)}")
     paper_id = req.paper_id
     abstract = req.abstract
     title = req.title
@@ -81,16 +77,16 @@ def summarize_paper(req: SummarizeRequest):
     published = req.published
 
     if not abstract or abstract.strip() == '':
+        logger.warning(f"No abstract for paper_id={paper_id}")
         return {"error": "Cannot summarize: No abstract available for this paper"}
 
-    # Check cache first
+    logger.info(f"Checking cache for paper_id={req.paper_id}")
     cached = get_summary_cache(paper_id)
     if cached:
-        return {
-            "summary": cached.get("summary"),
-            "cached": True
-        }
+        logger.info(f"Cache hit for paper_id={paper_id}")
+        return {"summary": cached.get("summary"), "cached": True}
 
+    logger.info("Generating new summary")
     published_str = str(published) if published else 'Unknown year'
     prompt = f"""
         Title: {title}
@@ -121,19 +117,22 @@ def summarize_paper(req: SummarizeRequest):
     """
 
     try:
-        response = ai_client.chat.completions.create(
+        logger.info("Calling Groq API")
+        response = await ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model='llama-3.3-70b-versatile',
-            max_tokens=512,
+            max_tokens=256,
             temperature=0.5
         )
         summary = response.choices[0].message.content
-        set_summary_cache(paper_id, summary)
+        logger.info(f"Groq response received for paper_id={paper_id}")
+        try:
+            set_summary_cache(paper_id, summary)
+            logger.info(f"Cached summary for paper_id={paper_id}")
+        except Exception as e:
+            logger.error(f"Failed to cache summary for paper_id={paper_id}: {str(e)}")
+            # Continue to return summary even if caching fails
         return {"summary": summary, "cached": False}
     except Exception as e:
+        logger.error(f"Groq error for paper_id={paper_id}: {str(e)}")
         return {"error": f"Failed to generate summary: {str(e)}"}
-
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8080))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
