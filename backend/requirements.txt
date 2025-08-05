@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+requests
+firebase-admin
+groq
+python-multipart
+python-dotenv

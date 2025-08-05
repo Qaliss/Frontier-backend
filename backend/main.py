@@ -1,0 +1,134 @@
+from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Union
+import requests
+from firebase_service import get_summary_cache, set_summary_cache
+from groq import Groq
+import os
+
+
+class SummarizeRequest(BaseModel):
+    paper_id: str
+    abstract: str
+    title: str = ""
+    authors: List[str] = []
+    published: Union[str, int] = ""
+
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+ai_client = Groq(api_key=GROQ_API_KEY)
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/search-papers")
+def search_papers(
+    query: str = Query(default='', description="Search query for research papers"),
+    sort: str = Query(default='relevance', description="Sort order for results"),
+    year_filter: str = Query(default='2020-2025', description="Year range filter for results")
+):
+    if not query.strip():
+        return {"results": []}
+
+    try:
+        years = year_filter.split('-')
+        from_year = years[0]
+        to_year = years[1] if len(years) > 1 else years[0]
+        filters = f"from_publication_date:{from_year}-01-01,to_publication_date:{to_year}-12-31,type:article"
+
+        response = requests.get(
+            'https://api.openalex.org/works',
+            params=[
+                ('search', query),
+                ('filter', filters),
+                ('per-page', 30),
+                ('sort', 'relevance_score:desc'),
+                ('mailto', 'pranaunaras12@gmail.com')
+            ],
+            headers={
+                "User-Agent": "FrontierApp/1.0 (pranaunaras12@gmail.com)"
+            }
+        )
+        response.raise_for_status()
+        results = response.json()["results"]
+        # Filter for papers with an abstract
+        filtered = [
+            paper for paper in results
+            if paper.get("abstract_inverted_index") or paper.get("abstract")
+        ]
+        return filtered
+    except requests.RequestException as e:
+        return {"error": str(e)}
+
+@app.post("/summarize-paper")
+def summarize_paper(req: SummarizeRequest):
+    paper_id = req.paper_id
+    abstract = req.abstract
+    title = req.title
+    authors = req.authors
+    published = req.published
+
+    if not abstract or abstract.strip() == '':
+        return {"error": "Cannot summarize: No abstract available for this paper"}
+
+    # Check cache first
+    cached = get_summary_cache(paper_id)
+    if cached:
+        return {
+            "summary": cached.get("summary"),
+            "cached": True
+        }
+
+    published_str = str(published) if published else 'Unknown year'
+    prompt = f"""
+        Title: {title}
+        Abstract: {abstract}
+        Authors: {', '.join([str(author) for author in authors])}
+        Published: {published_str}
+
+        You are a research curator helping people understand cutting-edge developments. Create a clear, digestible summary:
+
+        - **What this study tackled**: Explain the problem they were solving, using everyday analogies when helpful. If there are complex terms, explain them immediately in parentheses.
+
+        - **How they did it**: Describe their approach in simple terms. Think "they tested this by..." rather than technical jargon.
+
+        - **Key discoveries**: Present findings with specific numbers, but explain what those numbers actually mean practically. Highlight anything surprising or counterintuitive.
+
+        - **Why this matters**: Connect to real-world applications or implications a general audience would care about.
+
+        Writing Guidelines:
+        - Use proper markdown headers (##) for each section
+        - Assume intelligent readers who aren't experts in this field
+        - Immediately explain technical terms: "ptychography (an advanced imaging technique that...)"
+        - Use analogies to familiar concepts for complex ideas
+        - Keep sentences short and clear
+        - Call out surprising findings as interesting
+        - Focus on insights that make people think "oh, that's clever!"
+
+        Keep each bullet point concise but informative.
+    """
+
+    try:
+        response = ai_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model='llama-3.3-70b-versatile',
+            max_tokens=512,
+            temperature=0.5
+        )
+        summary = response.choices[0].message.content
+        set_summary_cache(paper_id, summary)
+        return {"summary": summary, "cached": False}
+    except Exception as e:
+        return {"error": f"Failed to generate summary: {str(e)}"}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
