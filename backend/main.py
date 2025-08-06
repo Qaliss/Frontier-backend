@@ -125,7 +125,6 @@ async def summarize_paper(req: SummarizeRequest):
         response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model='llama-3.3-70b-versatile',
-            max_tokens=256,
             temperature=0.5
         )
         summary = response.choices[0].message.content
