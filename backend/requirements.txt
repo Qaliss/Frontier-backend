@@ -5,3 +5,4 @@ firebase-admin
 groq
 python-multipart
 python-dotenv
+logging
