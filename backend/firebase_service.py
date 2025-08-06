@@ -9,7 +9,7 @@ logging.basicConfig(level=logging.INFO)
 
 # Initialize Firebase
 try:
-    cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")
+    cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json")
     logger.info(f"Loading Firebase credentials from {cred_path}")
     if not os.path.exists(cred_path):
         logger.error(f"Service account file not found: {cred_path}")
