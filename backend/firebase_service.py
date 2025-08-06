@@ -3,20 +3,45 @@ from firebase_admin import credentials, firestore
 import os
 import re
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Initialize Firebase
 try:
-    cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT", "serviceAccountKey.json")
-    logger.info(f"Loading Firebase credentials from {cred_path}")
-    if not os.path.exists(cred_path):
-        logger.error(f"Service account file not found: {cred_path}")
-        raise FileNotFoundError(f"Service account file not found: {cred_path}")
-    cred = credentials.Certificate(cred_path)
-    firebase_admin.initialize_app(cred)
-    logger.info("Firebase initialized successfully")
+    # Try to get credentials from environment variable first (recommended for production)
+    firebase_credentials = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+    
+    if firebase_credentials:
+        # Parse the JSON string from environment variable
+        logger.info("Loading Firebase credentials from environment variable")
+        try:
+            cred_dict = json.loads(firebase_credentials)
+            cred = credentials.Certificate(cred_dict)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in FIREBASE_SERVICE_ACCOUNT: {str(e)}")
+            raise
+    else:
+        # Fallback to file-based credentials (for local development)
+        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")
+        logger.info(f"Loading Firebase credentials from file: {cred_path}")
+        
+        if not os.path.exists(cred_path):
+            logger.error(f"Service account file not found: {cred_path}")
+            raise FileNotFoundError(f"Service account file not found: {cred_path}")
+        
+        cred = credentials.Certificate(cred_path)
+    
+    # Check if Firebase app is already initialized
+    try:
+        firebase_admin.get_app()
+        logger.info("Firebase app already initialized")
+    except ValueError:
+        # App doesn't exist, initialize it
+        firebase_admin.initialize_app(cred)
+        logger.info("Firebase initialized successfully")
+        
 except Exception as e:
     logger.error(f"Firebase initialization failed: {str(e)}")
     raise
