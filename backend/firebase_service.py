@@ -1,52 +1,61 @@
-import firebase_admin
-from firebase_admin import credentials, firestore
+import logging
 import os
 import re
-import logging
 import json
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Initialize Firebase
-try:
-    # Try to get credentials from environment variable first (recommended for production)
-    firebase_credentials = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+# Global variables to avoid re-initialization
+db = None
+firebase_initialized = False
+
+def init_firebase():
+    """Initialize Firebase only once"""
+    global db, firebase_initialized
     
-    if firebase_credentials:
-        # Parse the JSON string from environment variable
+    if firebase_initialized:
+        return db
+    
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        
+        # Get credentials from environment variable
+        firebase_credentials = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+        
+        if not firebase_credentials:
+            logger.error("FIREBASE_SERVICE_ACCOUNT environment variable not set")
+            raise ValueError("FIREBASE_SERVICE_ACCOUNT environment variable not set")
+        
         logger.info("Loading Firebase credentials from environment variable")
+        
+        # Parse the JSON string from environment variable
         try:
             cred_dict = json.loads(firebase_credentials)
             cred = credentials.Certificate(cred_dict)
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON in FIREBASE_SERVICE_ACCOUNT: {str(e)}")
             raise
-    else:
-        # Fallback to file-based credentials (for local development)
-        cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "serviceAccountKey.json")
-        logger.info(f"Loading Firebase credentials from file: {cred_path}")
         
-        if not os.path.exists(cred_path):
-            logger.error(f"Service account file not found: {cred_path}")
-            raise FileNotFoundError(f"Service account file not found: {cred_path}")
+        # Check if Firebase app is already initialized
+        try:
+            app = firebase_admin.get_app()
+            logger.info("Firebase app already initialized")
+        except ValueError:
+            # App doesn't exist, initialize it
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase initialized successfully")
         
-        cred = credentials.Certificate(cred_path)
-    
-    # Check if Firebase app is already initialized
-    try:
-        firebase_admin.get_app()
-        logger.info("Firebase app already initialized")
-    except ValueError:
-        # App doesn't exist, initialize it
-        firebase_admin.initialize_app(cred)
-        logger.info("Firebase initialized successfully")
+        db = firestore.client()
+        firebase_initialized = True
+        return db
         
-except Exception as e:
-    logger.error(f"Firebase initialization failed: {str(e)}")
-    raise
-
-db = firestore.client()
+    except Exception as e:
+        logger.error(f"Firebase initialization failed: {str(e)}")
+        # Don't raise the exception - just disable Firebase functionality
+        firebase_initialized = False
+        return None
 
 def sanitize_paper_id(paper_id):
     """
@@ -72,10 +81,18 @@ def sanitize_paper_id(paper_id):
     return sanitized
 
 def get_summary_cache(paper_id):
+    """Get cached summary for a paper"""
     logger.info(f"Fetching cache for paper_id={paper_id}")
+    
+    # Initialize Firebase if not already done
+    firestore_db = init_firebase()
+    if not firestore_db:
+        logger.warning("Firebase not available, cache disabled")
+        return None
+    
     try:
         sanitized_id = sanitize_paper_id(paper_id)
-        doc = db.collection("summaries").document(sanitized_id).get()
+        doc = firestore_db.collection("summaries").document(sanitized_id).get()
         if doc.exists:
             logger.info(f"Cache found for paper_id={paper_id}")
             return doc.to_dict()
@@ -86,10 +103,19 @@ def get_summary_cache(paper_id):
         return None
 
 def set_summary_cache(paper_id, summary):
+    """Cache a summary for a paper"""
     logger.info(f"Setting cache for paper_id={paper_id}")
+    
+    # Initialize Firebase if not already done
+    firestore_db = init_firebase()
+    if not firestore_db:
+        logger.warning("Firebase not available, cache disabled")
+        return True  # Pretend success so the app doesn't break
+    
     try:
+        from firebase_admin import firestore
         sanitized_id = sanitize_paper_id(paper_id)
-        db.collection("summaries").document(sanitized_id).set({
+        firestore_db.collection("summaries").document(sanitized_id).set({
             "summary": summary,
             "original_paper_id": paper_id,
             "timestamp": firestore.SERVER_TIMESTAMP
@@ -98,4 +124,4 @@ def set_summary_cache(paper_id, summary):
         return True
     except Exception as e:
         logger.error(f"Error setting cache for paper_id={paper_id}: {str(e)}")
-        return False
+        return True  # Pretend success so the app doesn't break

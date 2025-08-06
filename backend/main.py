@@ -122,7 +122,7 @@ async def summarize_paper(req: SummarizeRequest):
 
     try:
         logger.info("Calling Groq API")
-        response = await ai_client.chat.completions.create(
+        response = ai_client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model='llama-3.3-70b-versatile',
             max_tokens=256,
