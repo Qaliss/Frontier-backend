@@ -32,7 +32,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"message": "Welcome to Frontier v0.2 API! Use /search-papers to find research or /summarize-paper for AI summaries."}
 
