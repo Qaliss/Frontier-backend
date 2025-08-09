@@ -7,6 +7,7 @@ from firebase_service import get_summary_cache, set_summary_cache
 from groq import Groq
 import os
 import logging
+from datetime import datetime, timedelta
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,6 +36,48 @@ app.add_middleware(
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"message": "Welcome to Frontier v0.2 API! Use /search-papers to find research or /summarize-paper for AI summaries."}
+
+@app.get("/get-trending")
+async def get_trending(
+    days: int = Query(default=14, description="How far back to look for trending papers"),
+    per_page: int = Query(default=30, description="Number of results to return")
+):
+    try:
+        recent_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        filters = f"from_publication_date:{recent_date},type:article"
+        response = requests.get(
+            'https://api.openalex.org/works',
+            params=[
+                ('filter', filters),
+                ('per-page', per_page * 2),  # grab more, we’ll filter + sort
+                ('sort', 'publication_date:desc'),
+                ('mailto', 'pranaunaras12@gmail.com')
+            ],
+            headers={"User-Agent": "FrontierApp/1.0 (pranaunaras12@gmail.com)"}
+        )
+        response.raise_for_status()
+        results = response.json()["results"]
+
+        # Calculate viral score
+        trending = []
+        for paper in results:
+            pub_date_str = paper.get("publication_date")
+            if not pub_date_str:
+                continue
+            pub_date = datetime.strptime(pub_date_str, "%Y-%m-%d")
+            days_since = max((datetime.utcnow() - pub_date).days, 1)
+            citations = paper.get("cited_by_count", 0)
+            viral_score = citations / days_since
+            paper["viral_score"] = viral_score
+            trending.append(paper)
+
+        # Sort by viral score, return top N
+        trending.sort(key=lambda x: x["viral_score"], reverse=True)
+        return trending[:per_page]
+
+    except requests.RequestException as e:
+        logger.error(f"Trending error: {str(e)}")
+        return {"error": str(e)}
 
 @app.get("/search-papers")
 async def search_papers(
