@@ -40,30 +40,36 @@ async def root():
 @app.get("/get-trending")
 async def get_trending(
     category: str = Query(default='', description="Optional research category"),
-    limit: int = Query(default=10, description="Number of trending papers")
+    limit: int = Query(default=10, description="Number of trending papers"),
+    days: int = Query(default=14, description="Lookback period for trending papers in days")
 ):
-    logger.info(f"Fetching trending papers, category={category}")
+    logger.info(f"Fetching trending papers, category={category}, limit={limit}, days={days}")
     try:
-        filters = "type:article"
+        # Date filter: last X days
+        from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
+        filters = f"from_publication_date:{from_date},type:article"
+
         if category:
-            filters += f",concepts.id:{category}"  # Replace with actual concept IDs if needed
+            filters += f",concepts.id:{category}"
 
         response = requests.get(
             'https://api.openalex.org/works',
             params=[
                 ('filter', filters),
-                ('sort', 'cited_by_count:desc'),  # Most cited = trending
-                ('per-page', limit),
+                ('sort', 'cited_by_count:desc'),
+                ('per_page', limit),  # ✅ correct param
                 ('mailto', 'pranaunaras12@gmail.com')
             ],
             headers={"User-Agent": "FrontierApp/1.0"}
         )
         response.raise_for_status()
         results = response.json().get("results", [])
-        return {"trending": results}
+        
+        return results  # ✅ return array directly
     except requests.RequestException as e:
         logger.error(f"Trending error: {str(e)}")
         return {"error": str(e)}
+
     
 
 @app.get("/search-papers")
