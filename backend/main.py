@@ -40,8 +40,8 @@ async def root():
 @app.get("/get-trending")
 async def get_trending(
     category: str = Query(default='', description="Optional research category"),
-    limit: int = Query(default=10, description="Number of trending papers"),
-    days: int = Query(default=14, description="Lookback period for trending papers in days")
+    limit: int = Query(default=30, description="Number of trending papers"),
+    days: int = Query(default=365, description="Lookback period for trending papers in days")
 ):
     logger.info(f"Fetching trending papers, category={category}, limit={limit}, days={days}")
     try:
