@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Union
@@ -8,8 +8,14 @@ from groq import Groq
 import os
 import logging
 from datetime import datetime, timedelta
+import firebase_admin
+from firebase_admin import credentials, auth
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
+
+guest_summary_usage = defaultdict(list)
+
 logger = logging.getLogger(__name__)
 
 class SummarizeRequest(BaseModel):
@@ -123,8 +129,39 @@ async def search_papers(
         logger.error(f"Search error: {str(e)}")
         return {"error": str(e)}
 
+
+GUEST_LIMIT = 5
+WINDOW_SECONDS = 3600
+
 @app.post("/summarize-paper")
-async def summarize_paper(req: SummarizeRequest):
+async def summarize_paper(req: SummarizeRequest, request: Request):
+
+    logged_in = False
+    user_id = None
+
+    # Check for Firebase token
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+        try:
+            decoded_token = auth.verify_id_token(token)
+            user_id = decoded_token.get("uid")
+            logged_in = True
+            logger.info(f"Authenticated user: {user_id}")
+        except Exception as e:
+            logger.error(f"Failed to verify token: {str(e)}")
+
+    if not logged_in:
+        ip = request.client.host
+        now = datetime.now()
+        guest_summary_usage[ip] = [
+            ts for ts in guest_summary_usage
+        ]
+        if len(guest_summary_usage[ip]) >= GUEST_LIMIT:
+            logger.warning(f"Guest limit reached for IP: {ip}")
+            return {"error": f"Guest limit reached: {GUEST_LIMIT} summaries/hour without login."}
+        guest_summary_usage[ip].append(now)
+
     logger.info(f"Received summarize request: paper_id={req.paper_id}, title={req.title}, abstract_length={len(req.abstract)}")
     paper_id = req.paper_id
     abstract = req.abstract
