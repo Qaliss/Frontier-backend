@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Query, Request, HTTPException
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Union
@@ -8,25 +8,8 @@ from groq import Groq
 import os
 import logging
 from datetime import datetime, timedelta
-import firebase_admin
-from firebase_admin import credentials, auth
-from collections import defaultdict
-import time
-import json
-
-firebase_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
-if not firebase_json:
-    raise ValueError("FIREBASE_SERVICE_ACCOUNT not set")
-
-firebase_dict = json.loads(firebase_json)
-cred = credentials.Certificate(firebase_dict)
-firebase_admin.initialize_app(cred)
 
 logging.basicConfig(level=logging.INFO)
-
-guest_summary_usage = defaultdict(list)
-user_summary_usage = defaultdict(list)
-
 logger = logging.getLogger(__name__)
 
 class SummarizeRequest(BaseModel):
@@ -49,62 +32,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-GUEST_LIMIT = 5
-USER_LIMIT = 50  # Higher limit for authenticated users
-WINDOW_SECONDS = 3600  # 1 hour
-
-def get_user_from_request(request: Request):
-    """Extract user info from request, return (logged_in, user_id)"""
-    auth_header = request.headers.get("Authorization")
-    if auth_header and auth_header.startswith("Bearer "):
-        token = auth_header.split(" ")[1]
-        try:
-            decoded_token = auth.verify_id_token(token)
-            user_id = decoded_token.get("uid")
-            logger.info(f"Authenticated user: {user_id}")
-            return True, user_id
-        except Exception as e:
-            logger.error(f"Failed to verify token: {str(e)}")
-    return False, None
-
-def get_remaining_summaries(logged_in: bool, user_id: str = None, ip: str = None):
-    """Get remaining summaries for user or guest"""
-    now = time.time()
-    
-    if logged_in and user_id:
-        # Clean old entries
-        user_summary_usage[user_id] = [
-            ts for ts in user_summary_usage[user_id] if now - ts < WINDOW_SECONDS
-        ]
-        used = len(user_summary_usage[user_id])
-        return max(0, USER_LIMIT - used)
-    else:
-        # Guest user
-        if ip not in guest_summary_usage:
-            guest_summary_usage[ip] = []
-        
-        # Clean old entries
-        guest_summary_usage[ip] = [
-            ts for ts in guest_summary_usage[ip] if now - ts < WINDOW_SECONDS
-        ]
-        used = len(guest_summary_usage[ip])
-        return max(0, GUEST_LIMIT - used)
-
-@app.get("/summary-quota")
-async def get_summary_quota(request: Request):
-    """Get remaining summaries for current user/IP"""
-    logged_in, user_id = get_user_from_request(request)
-    ip = request.client.host
-    
-    remaining = get_remaining_summaries(logged_in, user_id, ip)
-    
-    return {
-        "remaining": remaining,
-        "limit": USER_LIMIT if logged_in else GUEST_LIMIT,
-        "window_hours": WINDOW_SECONDS // 3600,
-        "authenticated": logged_in
-    }
 
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
@@ -159,6 +86,8 @@ async def get_trending(
         logger.error(f"Trending error: {str(e)}")
         return {"error": str(e)}
 
+    
+
 @app.get("/search-papers")
 async def search_papers(
     query: str = Query(default='', description="Search query for research papers"),
@@ -195,50 +124,7 @@ async def search_papers(
         return {"error": str(e)}
 
 @app.post("/summarize-paper")
-async def summarize_paper(req: SummarizeRequest, request: Request):
-    logged_in, user_id = get_user_from_request(request)
-    ip = request.client.host
-    now = time.time()
-
-    if logged_in and user_id:
-        # Clean old entries for authenticated user
-        user_summary_usage[user_id] = [
-            ts for ts in user_summary_usage[user_id] if now - ts < WINDOW_SECONDS
-        ]
-
-        if len(user_summary_usage[user_id]) >= USER_LIMIT:
-            remaining = get_remaining_summaries(True, user_id)
-            logger.warning(f"User limit reached for user: {user_id}")
-            raise HTTPException(
-                status_code=429,
-                detail=f"Rate limit exceeded. You have {remaining} summaries remaining."
-            )
-
-        user_summary_usage[user_id].append(now)
-        logger.info(f"User {user_id} used summary ({len(user_summary_usage[user_id])}/{USER_LIMIT})")
-
-        # Optional: clear guest usage for this IP
-        if ip in guest_summary_usage:
-            del guest_summary_usage[ip]
-
-    else:
-        # Guest user rate limiting
-        guest_summary_usage[ip] = [
-            ts for ts in guest_summary_usage.get(ip, []) if now - ts < WINDOW_SECONDS
-        ]
-
-        if len(guest_summary_usage[ip]) >= GUEST_LIMIT:
-            remaining = get_remaining_summaries(False, None, ip)
-            logger.warning(f"Guest limit reached for IP: {ip}")
-            raise HTTPException(
-                status_code=429,
-                detail=f"Guest limit reached: {GUEST_LIMIT} summaries/hour. Please log in for more summaries. Remaining: {remaining}"
-            )
-
-        guest_summary_usage[ip].append(now)
-        logger.info(f"Guest {ip} used summary ({len(guest_summary_usage[ip])}/{GUEST_LIMIT})")
-
-
+async def summarize_paper(req: SummarizeRequest):
     logger.info(f"Received summarize request: paper_id={req.paper_id}, title={req.title}, abstract_length={len(req.abstract)}")
     paper_id = req.paper_id
     abstract = req.abstract
@@ -254,13 +140,7 @@ async def summarize_paper(req: SummarizeRequest, request: Request):
     cached = get_summary_cache(paper_id)
     if cached:
         logger.info(f"Cache hit for paper_id={paper_id}")
-        # Still return remaining count even for cached results
-        remaining = get_remaining_summaries(logged_in, user_id, ip)
-        return {
-            "summary": cached.get("summary"), 
-            "cached": True,
-            "remaining_summaries": remaining
-        }
+        return {"summary": cached.get("summary"), "cached": True}
 
     logger.info("Generating new summary")
     published_str = str(published) if published else 'Unknown year'
@@ -301,20 +181,13 @@ async def summarize_paper(req: SummarizeRequest, request: Request):
         )
         summary = response.choices[0].message.content
         logger.info(f"Groq response received for paper_id={paper_id}")
-        
         try:
             set_summary_cache(paper_id, summary)
             logger.info(f"Cached summary for paper_id={paper_id}")
         except Exception as e:
             logger.error(f"Failed to cache summary for paper_id={paper_id}: {str(e)}")
             # Continue to return summary even if caching fails
-        
-        remaining = get_remaining_summaries(logged_in, user_id, ip)
-        return {
-            "summary": summary, 
-            "cached": False,
-            "remaining_summaries": remaining
-        }
+        return {"summary": summary, "cached": False}
     except Exception as e:
         logger.error(f"Groq error for paper_id={paper_id}: {str(e)}")
         return {"error": f"Failed to generate summary: {str(e)}"}
