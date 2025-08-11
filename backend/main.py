@@ -200,43 +200,44 @@ async def summarize_paper(req: SummarizeRequest, request: Request):
     ip = request.client.host
     now = time.time()
 
-    # Check and update rate limits
     if logged_in and user_id:
         # Clean old entries for authenticated user
         user_summary_usage[user_id] = [
             ts for ts in user_summary_usage[user_id] if now - ts < WINDOW_SECONDS
         ]
-        
+
         if len(user_summary_usage[user_id]) >= USER_LIMIT:
-            remaining = get_remaining_summaries(logged_in, user_id, ip)
+            remaining = get_remaining_summaries(True, user_id)
             logger.warning(f"User limit reached for user: {user_id}")
             raise HTTPException(
-                status_code=429, 
+                status_code=429,
                 detail=f"Rate limit exceeded. You have {remaining} summaries remaining."
             )
-        
+
         user_summary_usage[user_id].append(now)
         logger.info(f"User {user_id} used summary ({len(user_summary_usage[user_id])}/{USER_LIMIT})")
+
+        # Optional: clear guest usage for this IP
+        if ip in guest_summary_usage:
+            del guest_summary_usage[ip]
+
     else:
         # Guest user rate limiting
-        if ip not in guest_summary_usage:
-            guest_summary_usage[ip] = []
-            
-        # Clean old entries for guest
         guest_summary_usage[ip] = [
-            ts for ts in guest_summary_usage[ip] if now - ts < WINDOW_SECONDS
+            ts for ts in guest_summary_usage.get(ip, []) if now - ts < WINDOW_SECONDS
         ]
-        
+
         if len(guest_summary_usage[ip]) >= GUEST_LIMIT:
-            remaining = get_remaining_summaries(logged_in, user_id, ip)
+            remaining = get_remaining_summaries(False, None, ip)
             logger.warning(f"Guest limit reached for IP: {ip}")
             raise HTTPException(
                 status_code=429,
                 detail=f"Guest limit reached: {GUEST_LIMIT} summaries/hour. Please log in for more summaries. Remaining: {remaining}"
             )
-        
+
         guest_summary_usage[ip].append(now)
         logger.info(f"Guest {ip} used summary ({len(guest_summary_usage[ip])}/{GUEST_LIMIT})")
+
 
     logger.info(f"Received summarize request: paper_id={req.paper_id}, title={req.title}, abstract_length={len(req.abstract)}")
     paper_id = req.paper_id
