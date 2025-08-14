@@ -71,6 +71,9 @@ async def get_trending(
 
         if category:
             filters += f",concepts.id:{category}"
+        else:
+            concept_filter = "|".join(INNOVATION_CONCEPTS)
+            filters += f",concepts.id:{concept_filter}"
 
         response = requests.get(
             'https://api.openalex.org/works',
