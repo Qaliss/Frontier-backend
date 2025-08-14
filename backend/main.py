@@ -55,7 +55,12 @@ async def get_trending(
         "C127413603",  # Engineering
         "C39432304",   # Environmental science
         "C71924100",   # Medicine
-        # "C162324750",  # Economics (for fintech, behavioral econ, etc.)
+        "C41008148",   # Materials science
+        "C78519656",   # Machine learning (subset of CS but very trendy)
+        "C192562407",  # Artificial intelligence
+        "C144024400",  # Biotechnology
+        "C15744967",   # Nanotechnology
+        "C204787340",  # Robotics
     ]
 
     try:
