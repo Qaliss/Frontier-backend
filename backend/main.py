@@ -41,9 +41,10 @@ async def root():
 async def get_trending(
     category: str = Query(default='', description="Optional research category"),
     limit: int = Query(default=30, description="Number of trending papers"),
-    days: int = Query(default=100, description="Lookback period for trending papers in days")
+    days: int = Query(default=365, description="Lookback period for trending papers in days")
 ):
     logger.info(f"Fetching trending papers, category={category}, limit={limit}, days={days}")
+
 
     # Innovation-focused concept IDs for home page trending
     INNOVATION_CONCEPTS = [
@@ -61,9 +62,7 @@ async def get_trending(
     try:
         # Date filter: last X days
         from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
-
-        concept_filter = "|".join(INNOVATION_CONCEPTS)
-        filters = f"from_publication_date:{from_date},type:article,concepts.id:{concept_filter}"
+        filters = f"from_publication_date:{from_date},type:article"
 
         if category:
             filters += f",concepts.id:{category}"
