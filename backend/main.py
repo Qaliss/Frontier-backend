@@ -44,6 +44,21 @@ async def get_trending(
     days: int = Query(default=365, description="Lookback period for trending papers in days")
 ):
     logger.info(f"Fetching trending papers, category={category}, limit={limit}, days={days}")
+
+
+    # Innovation-focused concept IDs for home page trending
+    INNOVATION_CONCEPTS = [
+        "C127313418",  # Computer science
+        "C33923547",   # Mathematics  
+        "C121332964",  # Physics
+        "C185592680",  # Chemistry
+        "C86803240",   # Biology
+        "C127413603",  # Engineering
+        "C39432304",   # Environmental science
+        "C71924100",   # Medicine
+        # "C162324750",  # Economics (for fintech, behavioral econ, etc.)
+    ]
+
     try:
         # Date filter: last X days
         from_date = (datetime.utcnow() - timedelta(days=days)).strftime("%Y-%m-%d")
