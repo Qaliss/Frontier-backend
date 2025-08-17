@@ -1,13 +1,14 @@
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List, Union
+from typing import List, Union, Optional
 import requests
 from firebase_service import get_summary_cache, set_summary_cache
 from groq import Groq
 import os
 import logging
 from datetime import datetime, timedelta
+from enum import Enum
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,6 +19,11 @@ class SummarizeRequest(BaseModel):
     title: str = ""
     authors: List[str] = []
     published: Union[str, int] = ""
+
+class SortOption(str, Enum):
+    most_cited = "cited_by_count:desc"
+    newest = "publication_date:desc"
+    oldest = "publication_date:asc"
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 if not GROQ_API_KEY:
@@ -39,9 +45,11 @@ async def root():
 
 @app.get("/get-trending")
 async def get_trending(
+    sort: SortOption = Query(default=SortOption.most_cited, description="Sort order for trending papers"),
     category: str = Query(default='', description="Optional research category"),
     limit: int = Query(default=30, description="Number of trending papers"),
-    days: int = Query(default=365, description="Lookback period for trending papers in days")
+    days: int = Query(default=365, description="Lookback period for trending papers in days"),
+    institution: Optional[str] = Query(default=None, description="Filter by institution name")
 ):
     logger.info(f"Fetching trending papers, category={category}, limit={limit}, days={days}")
 
@@ -75,12 +83,15 @@ async def get_trending(
             concept_filter = "|".join(INNOVATION_CONCEPTS)
             filters += f",concepts.id:{concept_filter}"
 
+        if institution:
+            filters += f",authorships.institution.display_name.search:{institution}"
+
         response = requests.get(
             'https://api.openalex.org/works',
             params=[
                 ('filter', filters),
-                ('sort', 'cited_by_count:desc'),
-                ('per_page', limit),  # ✅ correct param
+                ('sort', sort.value),
+                ('per_page', limit),
                 ('mailto', 'pranaunaras12@gmail.com')
             ],
             headers={"User-Agent": "FrontierApp/1.0"}
@@ -98,25 +109,29 @@ async def get_trending(
 @app.get("/search-papers")
 async def search_papers(
     query: str = Query(default='', description="Search query for research papers"),
-    sort: str = Query(default='relevance', description="Sort order for results"),
-    year_filter: str = Query(default='2020-2025', description="Year range filter for results")
+    sort: SortOption = Query(default=SortOption.most_cited, description="Sort order for results"),
+    from_year: int = Query(default=2000, description="Start year for publication date filter"),
+    to_year: int = Query(default=2025, description="End year for publication date filter"),
+    institution: Optional[str] = Query(default=None, description="Filter by institution name"),
+    limit: int = Query(default=30, description="Number of results to return"),
 ):
-    logger.info(f"Received search request: query={query}, sort={sort}, year_filter={year_filter}")
+    logger.info(f"Received search request: query={query}, sort={sort}, years={from_year}-{to_year}, institution={institution}")
     if not query.strip():
         logger.warning("Empty query received")
         return {"results": []}
     try:
-        years = year_filter.split('-')
-        from_year = years[0]
-        to_year = years[1] if len(years) > 1 else years[0]
         filters = f"from_publication_date:{from_year}-01-01,to_publication_date:{to_year}-12-31,type:article"
+
+        if institution:
+            filters += f",authorships.institution.display_name.search:{institution}"
+
         response = requests.get(
             'https://api.openalex.org/works',
             params=[
                 ('search', query),
                 ('filter', filters),
-                ('per-page', 30),
-                ('sort', 'relevance_score:desc'),
+                ('per-page', limit),
+                ('sort', sort.value),
                 ('mailto', 'pranaunaras12@gmail.com')
             ],
             headers={"User-Agent": "FrontierApp/1.0 (pranaunaras12@gmail.com)"}
